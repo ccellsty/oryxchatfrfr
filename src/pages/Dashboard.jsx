@@ -11,25 +11,72 @@ import {
   Plus,
   UserPlus,
   Shield,
-  Crown
+  Crown,
+  Clock,
+  UserCheck,
+  UserX
 } from 'lucide-react';
 
 const Dashboard = () => {
   const { user, profile, signOut } = useAuth();
   const [groups, setGroups] = useState([]);
   const [friends, setFriends] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [friendUsername, setFriendUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const [requestLoading, setRequestLoading] = useState({});
 
   useEffect(() => {
     if (user) {
       fetchUserGroups();
       fetchFriends();
+      fetchPendingRequests();
+      
+      // Set up real-time subscriptions
+      setupSubscriptions();
     }
   }, [user]);
+
+  const setupSubscriptions = () => {
+    // Subscribe to friend request changes
+    const friendSubscription = supabase
+      .channel('friend-requests')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'friends',
+          filter: `friend_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('New friend request received:', payload);
+          fetchPendingRequests();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'friends',
+          filter: `friend_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('Friend request updated:', payload);
+          fetchPendingRequests();
+          fetchFriends(); // Refresh friends list if request was accepted
+        }
+      )
+      .subscribe();
+
+    return () => {
+      friendSubscription.unsubscribe();
+    };
+  };
 
   const fetchUserGroups = async () => {
     const { data, error } = await supabase
@@ -60,6 +107,23 @@ const Dashboard = () => {
 
     if (!error && data) {
       setFriends(data.map(item => item.friend));
+    }
+  };
+
+  const fetchPendingRequests = async () => {
+    const { data, error } = await supabase
+      .from('friends')
+      .select(`
+        id,
+        status,
+        created_at,
+        user:profiles!friends_user_id_fkey(*)
+      `)
+      .eq('friend_id', user.id)
+      .eq('status', 'pending');
+
+    if (!error && data) {
+      setPendingRequests(data);
     }
   };
 
@@ -113,11 +177,18 @@ const Dashboard = () => {
       // Find user by username
       const { data: friendData, error: findError } = await supabase
         .from('profiles')
-        .select('id')
+        .select('id, username, display_name')
         .eq('username', friendUsername.trim())
         .single();
 
-      if (findError || !friendData) {
+      if (findError) {
+        if (findError.code === 'PGRST116') {
+          throw new Error('User not found');
+        }
+        throw findError;
+      }
+
+      if (!friendData) {
         throw new Error('User not found');
       }
 
@@ -126,14 +197,18 @@ const Dashboard = () => {
       }
 
       // Check if friend request already exists
-      const { data: existingRequest } = await supabase
+      const { data: existingRequest, error: checkError } = await supabase
         .from('friends')
-        .select('id')
+        .select('id, status')
         .or(`and(user_id.eq.${user.id},friend_id.eq.${friendData.id}),and(user_id.eq.${friendData.id},friend_id.eq.${user.id})`)
         .single();
 
       if (existingRequest) {
-        throw new Error('Friend request already exists');
+        if (existingRequest.status === 'pending') {
+          throw new Error('Friend request already sent');
+        } else if (existingRequest.status === 'accepted') {
+          throw new Error('This user is already your friend');
+        }
       }
 
       // Create friend request
@@ -147,17 +222,54 @@ const Dashboard = () => {
           }
         ]);
 
-      if (friendError) throw friendError;
+      if (friendError) {
+        if (friendError.code === '23505') { // Unique violation
+          throw new Error('Friend request already exists');
+        }
+        throw friendError;
+      }
 
       setFriendUsername('');
       setShowAddFriend(false);
-      alert('Friend request sent!');
-      fetchFriends();
+      alert(`Friend request sent to ${friendData.display_name || friendData.username}!`);
+      
     } catch (error) {
       console.error('Error adding friend:', error);
-      alert('Error adding friend: ' + error.message);
+      alert('Error: ' + error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFriendRequest = async (requestId, action) => {
+    setRequestLoading(prev => ({ ...prev, [requestId]: true }));
+    try {
+      if (action === 'accept') {
+        const { error } = await supabase
+          .from('friends')
+          .update({ status: 'accepted' })
+          .eq('id', requestId);
+
+        if (error) throw error;
+        alert('Friend request accepted!');
+      } else if (action === 'reject') {
+        const { error } = await supabase
+          .from('friends')
+          .delete()
+          .eq('id', requestId);
+
+        if (error) throw error;
+        alert('Friend request rejected.');
+      }
+
+      // Refresh the lists
+      await fetchPendingRequests();
+      await fetchFriends();
+    } catch (error) {
+      console.error('Error handling friend request:', error);
+      alert('Error: ' + error.message);
+    } finally {
+      setRequestLoading(prev => ({ ...prev, [requestId]: false }));
     }
   };
 
@@ -202,6 +314,61 @@ const Dashboard = () => {
               Add Friend
             </button>
           </div>
+
+          {/* Friend Requests Section */}
+          {pendingRequests.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-text-secondary mb-3 uppercase tracking-wider flex items-center">
+                <Clock className="w-4 h-4 mr-2" />
+                Friend Requests ({pendingRequests.length})
+              </h3>
+              <div className="space-y-2">
+                {pendingRequests.map(request => (
+                  <div key={request.id} className="flex items-center justify-between p-3 rounded-lg bg-bg-tertiary/50 border border-border-color">
+                    <div className="flex items-center">
+                      <div className="w-8 h-8 rounded-full bg-accent-color flex items-center justify-center text-sm font-bold mr-3">
+                        {request.user?.display_name?.[0]?.toUpperCase() || request.user?.username?.[0]?.toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-sm">
+                          {request.user?.display_name || request.user?.username}
+                        </div>
+                        <div className="text-xs text-text-secondary">
+                          @{request.user?.username}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleFriendRequest(request.id, 'accept')}
+                        disabled={requestLoading[request.id]}
+                        className="p-2 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                        title="Accept"
+                      >
+                        {requestLoading[request.id] ? (
+                          <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <UserCheck className="w-4 h-4" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleFriendRequest(request.id, 'reject')}
+                        disabled={requestLoading[request.id]}
+                        className="p-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                        title="Reject"
+                      >
+                        {requestLoading[request.id] ? (
+                          <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <UserX className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Group Chats Section */}
           <div className="mb-8">
@@ -411,7 +578,14 @@ const Dashboard = () => {
                   className="btn flex-1"
                   disabled={loading}
                 >
-                  {loading ? 'Sending...' : 'Send Request'}
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                      Sending...
+                    </>
+                  ) : (
+                    'Send Request'
+                  )}
                 </button>
               </div>
             </form>
