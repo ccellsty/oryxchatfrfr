@@ -19,10 +19,55 @@ const Register = () => {
     setLoading(true);
 
     try {
-      await signUp(email, password, username);
-      navigate('/');
+      // Basic validation
+      if (password.length < 6) {
+        throw new Error('Password must be at least 6 characters long');
+      }
+
+      if (username.length < 3) {
+        throw new Error('Username must be at least 3 characters long');
+      }
+
+      // Check for valid username format
+      if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+        throw new Error('Username can only contain letters, numbers, and underscores');
+      }
+
+      console.log('Attempting registration...');
+      const result = await signUp(email, password, username);
+      console.log('Registration result:', result);
+      
+      if (result.user) {
+        // Check if email confirmation is required
+        if (result.user.identities && result.user.identities.length === 0) {
+          setError('User already registered. Please sign in instead.');
+          return;
+        }
+        
+        if (result.session) {
+          // Immediate sign-in successful
+          navigate('/');
+        } else {
+          // Email confirmation required
+          setError('✅ Registration successful! Please check your email to confirm your account. You will be redirected to login.');
+          setTimeout(() => {
+            navigate('/login');
+          }, 4000);
+        }
+      }
     } catch (error) {
-      setError(error.message);
+      console.error('Registration error:', error);
+      
+      // Handle specific error cases
+      if (error.message.includes('User already registered')) {
+        setError('An account with this email already exists. Please sign in instead.');
+      } else if (error.message.includes('invalid_credentials')) {
+        setError('Invalid registration details. Please try again.');
+      } else if (error.message.includes('Email not confirmed')) {
+        setError('Please check your email to confirm your account before signing in.');
+      } else {
+        setError(error.message || 'Failed to create account. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -30,7 +75,7 @@ const Register = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="liquid-glass p-8 rounded-2xl w-full max-w-md">
+      <div className="liquid-glass p-8 rounded-2xl w-full max-w-md border border-border-color">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">
             <MessageSquare className="w-12 h-12 text-accent-color mr-3" />
@@ -40,27 +85,48 @@ const Register = () => {
         </div>
 
         {error && (
-          <div className="aero-glass p-4 mb-6 text-red-400 rounded-lg">
+          <div className={`aero-glass p-4 mb-6 rounded-lg ${
+            error.includes('✅') || error.includes('successful') 
+              ? 'text-green-400 border border-green-400/20' 
+              : 'text-red-400 border border-red-400/20'
+          }`}>
             {error}
+            {(error.includes('✅') || error.includes('successful')) && (
+              <div className="text-sm mt-2 opacity-90">
+                Redirecting to login...
+              </div>
+            )}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
+            <label className="block text-sm font-medium mb-2 text-text-secondary">
+              Username
+            </label>
             <input
               type="text"
-              placeholder="Username"
+              placeholder="Enter your username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="input w-full"
               required
+              minLength={3}
+              pattern="[a-zA-Z0-9_]+"
+              title="Username can only contain letters, numbers, and underscores"
             />
+            <p className="text-xs text-text-secondary mt-1">
+              3+ characters, letters, numbers, and underscores only
+            </p>
           </div>
 
           <div>
+            <label className="block text-sm font-medium mb-2 text-text-secondary">
+              Email
+            </label>
             <input
               type="email"
-              placeholder="Email"
+              placeholder="Enter your email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="input w-full"
@@ -69,22 +135,33 @@ const Register = () => {
           </div>
 
           <div>
+            <label className="block text-sm font-medium mb-2 text-text-secondary">
+              Password
+            </label>
             <input
               type="password"
-              placeholder="Password"
+              placeholder="Create a password (min. 6 characters)"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input w-full"
               required
+              minLength={6}
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="btn w-full"
+            className="btn w-full flex items-center justify-center"
           >
-            {loading ? 'Creating Account...' : 'Sign Up'}
+            {loading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                Creating Account...
+              </>
+            ) : (
+              'Sign Up'
+            )}
           </button>
         </form>
 
