@@ -9,14 +9,13 @@ import {
   Settings, 
   LogOut, 
   Plus,
-  Search,
   UserPlus,
   Shield,
   Crown
 } from 'lucide-react';
 
 const Dashboard = () => {
-  const { user, signOut } = useAuth();
+  const { user, profile, signOut } = useAuth();
   const [groups, setGroups] = useState([]);
   const [friends, setFriends] = useState([]);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
@@ -270,14 +269,14 @@ const Dashboard = () => {
         <div className="p-4 border-t border-border-color">
           <div className="flex items-center space-x-3 mb-4 p-3 rounded-lg bg-bg-tertiary/50">
             <div className="w-10 h-10 rounded-full bg-accent-color flex items-center justify-center text-white font-bold flex-shrink-0">
-              {user?.email?.[0]?.toUpperCase() || 'U'}
+              {profile?.display_name?.[0]?.toUpperCase() || profile?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
             </div>
             <div className="min-w-0 flex-1">
               <div className="font-semibold truncate text-sm">
-                {user?.email}
+                {profile?.display_name || profile?.username || user?.email}
               </div>
               <div className="text-xs text-text-secondary truncate">
-                Online
+                @{profile?.username || 'user'}
               </div>
             </div>
           </div>
