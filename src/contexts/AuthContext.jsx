@@ -63,6 +63,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const refreshProfile = async () => {
+    if (user) {
+      await fetchProfile(user.id);
+    }
+  };
+
   const signUp = async (email, password, username) => {
     console.log('Starting signup process for:', username);
     
@@ -110,6 +116,7 @@ export const AuthProvider = ({ children }) => {
     signIn,
     signOut,
     loading,
+    refreshProfile,
   };
 
   return (
