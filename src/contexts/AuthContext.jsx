@@ -10,10 +10,12 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [session, setSession] = useState(null);
 
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchProfile(session.user.id);
@@ -26,7 +28,8 @@ export const AuthProvider = ({ children }) => {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth event:', event);
+      console.log('Auth event:', event, 'Session:', session);
+      setSession(session);
       setUser(session?.user ?? null);
       
       if (session?.user) {
@@ -42,6 +45,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchProfile = async (userId) => {
     try {
+      console.log('Fetching profile for user:', userId);
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -50,16 +54,46 @@ export const AuthProvider = ({ children }) => {
 
       if (error) {
         console.error('Error fetching profile:', error);
-        // Profile might not be created yet, wait a bit and retry
-        setTimeout(() => fetchProfile(userId), 1000);
-        return;
+        // If profile doesn't exist, create one
+        if (error.code === 'PGRST116') {
+          await createProfile(userId);
+          return;
+        }
+        throw error;
       }
 
+      console.log('Profile fetched successfully:', data);
       setProfile(data);
     } catch (error) {
       console.error('Error in fetchProfile:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const createProfile = async (userId) => {
+    try {
+      const username = `user_${Math.random().toString(36).substr(2, 8)}`;
+      const { error } = await supabase
+        .from('profiles')
+        .insert([
+          {
+            id: userId,
+            username: username,
+            display_name: username,
+            theme_settings: { theme: "dark", accentColor: "#6366f1" }
+          },
+        ]);
+
+      if (error) {
+        console.error('Error creating profile:', error);
+        throw error;
+      }
+
+      // Fetch the newly created profile
+      await fetchProfile(userId);
+    } catch (error) {
+      console.error('Error in createProfile:', error);
     }
   };
 
@@ -112,6 +146,7 @@ export const AuthProvider = ({ children }) => {
   const value = {
     user,
     profile,
+    session,
     signUp,
     signIn,
     signOut,
