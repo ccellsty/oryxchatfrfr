@@ -3,11 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../lib/supabase';
-import { ArrowLeft, Upload, Save, User, Mail } from 'lucide-react';
+import { ArrowLeft, Upload, Save, User, Mail, LogOut } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
 const Settings = () => {
-  const { user, profile } = useAuth();
+  const { user, profile, session, signOut, refreshProfile } = useAuth();
   const { theme, accentColor, updateThemeSettings } = useTheme();
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -24,6 +24,19 @@ const Settings = () => {
     }
   }, [profile]);
 
+  // Verify session on component mount
+  useEffect(() => {
+    const verifySession = async () => {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession) {
+        setError('Your session has expired. Please sign in again.');
+        setTimeout(() => navigate('/login'), 2000);
+      }
+    };
+    
+    verifySession();
+  }, [navigate]);
+
   const handleSave = async (e) => {
     e.preventDefault();
     setError('');
@@ -31,6 +44,12 @@ const Settings = () => {
     setSaving(true);
 
     try {
+      // Verify session before proceeding
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
       let avatarUrl = profile?.avatar_url;
 
       // Upload new avatar if selected
@@ -53,8 +72,11 @@ const Settings = () => {
         avatarUrl = publicUrl;
       }
 
-      // Update profile
-      const { error: updateError } = await supabase
+      // Update profile with explicit error handling
+      console.log('Updating profile for user:', user.id);
+      console.log('Session exists:', !!session);
+      
+      const { data, error: updateError } = await supabase
         .from('profiles')
         .update({
           username: username.trim(),
@@ -62,33 +84,49 @@ const Settings = () => {
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', user.id);
+        .eq('id', user.id)
+        .select()
+        .single();
 
       if (updateError) {
-        console.error('Update error:', updateError);
+        console.error('Update error details:', updateError);
         
         if (updateError.code === '23505') { // Unique constraint violation
           throw new Error('Username already taken. Please choose a different one.');
         } else if (updateError.message.includes('permission denied')) {
-          throw new Error('Permission denied. Please make sure you are logged in properly.');
+          // Try to get more details about the permission error
+          const { data: { user: currentUser } } = await supabase.auth.getUser();
+          console.log('Current user from auth:', currentUser);
+          console.log('Target user ID:', user.id);
+          console.log('Are they the same?', currentUser?.id === user.id);
+          
+          throw new Error(`Permission denied. User ID mismatch or insufficient permissions. Please try signing out and back in.`);
         } else {
-          throw updateError;
+          throw new Error(`Update failed: ${updateError.message}`);
         }
       }
 
       setSuccess('Profile updated successfully!');
       setAvatarFile(null);
       
-      // Refresh the page after a short delay to show the changes
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
+      // Refresh profile data
+      await refreshProfile();
       
     } catch (error) {
       console.error('Error updating profile:', error);
       setError(error.message || 'Failed to update profile. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      navigate('/login');
+    } catch (error) {
+      console.error('Error signing out:', error);
+      setError('Error signing out: ' + error.message);
     }
   };
 
@@ -117,15 +155,44 @@ const Settings = () => {
     }
   };
 
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-bg-primary">
+        <div className="liquid-glass p-8 rounded-2xl text-center">
+          <div className="text-red-400 mb-4">Please sign in to access settings</div>
+          <Link to="/login" className="btn">
+            Sign In
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-4 bg-bg-primary">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
-        <div className="flex items-center mb-8">
-          <Link to="/" className="mr-4 p-2 rounded-lg hover:bg-white/5 transition-colors">
-            <ArrowLeft className="w-6 h-6" />
-          </Link>
-          <h1 className="text-3xl font-bold">Settings</h1>
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center">
+            <Link to="/" className="mr-4 p-2 rounded-lg hover:bg-white/5 transition-colors">
+              <ArrowLeft className="w-6 h-6" />
+            </Link>
+            <h1 className="text-3xl font-bold">Settings</h1>
+          </div>
+          <button
+            onClick={handleSignOut}
+            className="flex items-center p-3 rounded-lg hover:bg-white/5 transition-colors text-white bg-red-500/20 hover:bg-red-500/30 border border-red-500/30"
+          >
+            <LogOut className="w-4 h-4 mr-2" />
+            Sign Out
+          </button>
+        </div>
+
+        {/* Debug Info (remove in production) */}
+        <div className="liquid-glass p-4 mb-6 text-xs text-text-secondary rounded-lg border border-border-color">
+          <div>User ID: {user?.id}</div>
+          <div>Session: {session ? 'Active' : 'Inactive'}</div>
+          <div>Profile loaded: {profile ? 'Yes' : 'No'}</div>
         </div>
 
         {/* Error and Success Messages */}
