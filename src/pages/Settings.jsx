@@ -7,7 +7,7 @@ import { ArrowLeft, Upload, Save, User, Mail, LogOut } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
 const Settings = () => {
-  const { user, profile, session, signOut, refreshProfile } = useAuth();
+  const { user, profile, signOut, refreshProfile } = useAuth();
   const { theme, accentColor, updateThemeSettings } = useTheme();
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -24,19 +24,6 @@ const Settings = () => {
     }
   }, [profile]);
 
-  // Verify session on component mount
-  useEffect(() => {
-    const verifySession = async () => {
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (!currentSession) {
-        setError('Your session has expired. Please sign in again.');
-        setTimeout(() => navigate('/login'), 2000);
-      }
-    };
-    
-    verifySession();
-  }, [navigate]);
-
   const handleSave = async (e) => {
     e.preventDefault();
     setError('');
@@ -44,18 +31,26 @@ const Settings = () => {
     setSaving(true);
 
     try {
-      // Verify session before proceeding
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (!currentSession) {
-        throw new Error('Your session has expired. Please sign in again.');
+      // Get the current user from auth to ensure we have the right ID
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !currentUser) {
+        throw new Error('Unable to verify user authentication. Please sign in again.');
       }
+
+      console.log('Current user ID:', currentUser.id);
+      console.log('Profile user ID:', profile?.id);
+      console.log('Context user ID:', user?.id);
+
+      // Use the current user ID from auth, not from context or profile
+      const userId = currentUser.id;
 
       let avatarUrl = profile?.avatar_url;
 
       // Upload new avatar if selected
       if (avatarFile) {
         const fileExt = avatarFile.name.split('.').pop();
-        const fileName = `${user.id}/avatar.${fileExt}`;
+        const fileName = `${userId}/avatar.${fileExt}`;
 
         const { error: uploadError } = await supabase.storage
           .from('avatars')
@@ -72,9 +67,8 @@ const Settings = () => {
         avatarUrl = publicUrl;
       }
 
-      // Update profile with explicit error handling
-      console.log('Updating profile for user:', user.id);
-      console.log('Session exists:', !!session);
+      // Update profile using the verified user ID
+      console.log('Updating profile for user ID:', userId);
       
       const { data, error: updateError } = await supabase
         .from('profiles')
@@ -84,7 +78,7 @@ const Settings = () => {
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', user.id)
+        .eq('id', userId)  // Use the verified user ID
         .select()
         .single();
 
@@ -94,13 +88,7 @@ const Settings = () => {
         if (updateError.code === '23505') { // Unique constraint violation
           throw new Error('Username already taken. Please choose a different one.');
         } else if (updateError.message.includes('permission denied')) {
-          // Try to get more details about the permission error
-          const { data: { user: currentUser } } = await supabase.auth.getUser();
-          console.log('Current user from auth:', currentUser);
-          console.log('Target user ID:', user.id);
-          console.log('Are they the same?', currentUser?.id === user.id);
-          
-          throw new Error(`Permission denied. User ID mismatch or insufficient permissions. Please try signing out and back in.`);
+          throw new Error(`Database permission error. This might be a configuration issue.`);
         } else {
           throw new Error(`Update failed: ${updateError.message}`);
         }
@@ -186,13 +174,6 @@ const Settings = () => {
             <LogOut className="w-4 h-4 mr-2" />
             Sign Out
           </button>
-        </div>
-
-        {/* Debug Info (remove in production) */}
-        <div className="liquid-glass p-4 mb-6 text-xs text-text-secondary rounded-lg border border-border-color">
-          <div>User ID: {user?.id}</div>
-          <div>Session: {session ? 'Active' : 'Inactive'}</div>
-          <div>Profile loaded: {profile ? 'Yes' : 'No'}</div>
         </div>
 
         {/* Error and Success Messages */}
